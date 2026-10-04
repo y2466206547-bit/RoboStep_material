@@ -57,6 +57,38 @@ class _RawVideoWriter:
             raise RuntimeError(f"ffmpeg failed while writing {self.path}")
 
 
+class _FrozenLegacyActor(torch.nn.Module):
+    """Load the archived rsl_rl checkpoint without requiring its old runner."""
+
+    def __init__(self, state: dict[str, torch.Tensor]) -> None:
+        super().__init__()
+        self.mlp = torch.nn.Sequential(
+            torch.nn.Linear(70, 256),
+            torch.nn.ELU(),
+            torch.nn.Linear(256, 256),
+            torch.nn.ELU(),
+            torch.nn.Linear(256, 128),
+            torch.nn.ELU(),
+            torch.nn.Linear(128, 4),
+        )
+        self.register_buffer("state_mean", state["actor_obs_normalizer._mean"][:, :39].clone())
+        self.register_buffer("state_std", state["actor_obs_normalizer._std"][:, :39].clone())
+        self.mlp.load_state_dict(
+            {
+                key.replace("actor.", ""): value
+                for key, value in state.items()
+                if key.startswith("actor.")
+            }
+        )
+
+    def forward(self, observations):
+        values = observations["policy"] if hasattr(observations, "keys") else observations
+        values = values.to(dtype=torch.float32)
+        state = (values[..., :39] - self.state_mean) / (self.state_std + 1.0e-8)
+        values = torch.cat((state, values[..., 39:]), dim=-1)
+        return torch.clamp(self.mlp(values), -1.0, 1.0)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("checkpoint", type=Path)
@@ -76,11 +108,31 @@ def main() -> None:
     if args.video is not None and args.video_fps <= 0:
         raise SystemExit("video-fps must be positive")
     checkpoint = args.checkpoint.expanduser().resolve()
+    checkpoint_payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
     saved = json.loads((checkpoint.parent / "config.json").read_text(encoding="utf-8"))
     task_definition = saved["task_definition"]
     env_cfg = saved["environment"]
     runner_cfg = json.loads(json.dumps(saved["runner"]))
     runner_cfg["device"] = "cpu"
+    # rsl-rl 5 renamed the actor/critic entries and moved MLPModel.  The
+    # checkpoint tensors are unchanged, so adapt the frozen config at load
+    # time while retaining the release's original PPO architecture.
+    if "actor" not in runner_cfg:
+        policy_cfg = runner_cfg.pop("policy")
+        runner_cfg["actor"] = {
+            "class_name": "rsl_rl.models.MLPModel",
+            "hidden_dims": policy_cfg["actor_hidden_dims"],
+            "activation": policy_cfg["activation"],
+            "obs_normalization": policy_cfg["actor_obs_normalization"],
+        }
+        runner_cfg["critic"] = {
+            "class_name": "rsl_rl.models.MLPModel",
+            "hidden_dims": policy_cfg["critic_hidden_dims"],
+            "activation": policy_cfg["activation"],
+            "obs_normalization": policy_cfg["critic_obs_normalization"],
+        }
+        runner_cfg["obs_groups"] = {"actor": ["policy"], "critic": ["critic"]}
+    runner_cfg["algorithm"]["class_name"] = "rsl_rl.algorithms.PPO"
     stage_instructions = tuple(saved.get("stage_instructions", ()))
     if not stage_instructions:
         _, stage_instructions = stage_semantics(int(task_definition["macro_count"]))
@@ -117,14 +169,21 @@ def main() -> None:
     )
     video = None
     try:
-        runner = OnPolicyRunner(env, runner_cfg, log_dir=None, device="cpu")
-        runner.load(str(checkpoint), load_optimizer=False, map_location="cpu")
-        if (
-            task_definition.get("stage_context_normalization")
-            in (APPEND_STAGE_CONTEXT_PROTOCOL, RAW_STAGE_CONTEXT_PROTOCOL)
-        ):
-            _install_state_only_normalizers(runner.alg.policy)
-        policy = runner.get_inference_policy(device="cpu")
+        if "model_state_dict" in checkpoint_payload:
+            policy = _FrozenLegacyActor(checkpoint_payload["model_state_dict"])
+            policy.eval()
+        else:
+            runner = OnPolicyRunner(env, runner_cfg, log_dir=None, device="cpu")
+            try:
+                runner.load(str(checkpoint), load_optimizer=False, map_location="cpu")
+            except TypeError:
+                runner.load(str(checkpoint), map_location="cpu")
+            if (
+                task_definition.get("stage_context_normalization")
+                in (APPEND_STAGE_CONTEXT_PROTOCOL, RAW_STAGE_CONTEXT_PROTOCOL)
+            ):
+                _install_state_only_normalizers(runner.alg.policy)
+            policy = runner.get_inference_policy(device="cpu")
         obs = env.get_observations()
         if args.video is not None:
             video = _RawVideoWriter(

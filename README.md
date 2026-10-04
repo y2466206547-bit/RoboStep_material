@@ -214,7 +214,11 @@ included under `experiments/`, with the reportable RL checkpoints under
 
 ### Reproduce the measured Meta-World M10 composition
 
-After installing Meta-World and the optional PPO dependencies:
+After installing Meta-World, MuJoCo, TensorDict, and the PPO runtime:
+
+```bash
+python -m pip install -e ".[torch,m10]"
+```
 
 ```bash
 bash experiments/compositional/run_m10.sh

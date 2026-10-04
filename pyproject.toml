@@ -12,6 +12,7 @@ dependencies = ["numpy>=1.23"]
 [project.optional-dependencies]
 torch = ["torch>=2.0"]
 benchmarks = ["gymnasium>=0.28", "metaworld", "mani-skill"]
+m10 = ["rsl-rl-lib>=5.5", "tensordict>=0.14", "metaworld", "mujoco"]
 dev = ["pytest>=7"]
 
 [tool.setuptools.packages.find]
