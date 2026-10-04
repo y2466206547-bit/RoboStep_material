@@ -220,6 +220,15 @@ After installing Meta-World, MuJoCo, TensorDict, and the PPO runtime:
 python -m pip install -e ".[torch,m10]"
 ```
 
+For headless Linux rendering, set EGL and expose the pip-installed MuJoCo
+shared library before recording:
+
+```bash
+export MUJOCO_GL=egl
+MUJOCO_LIB="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/mujoco"
+export LD_LIBRARY_PATH="$MUJOCO_LIB:${LD_LIBRARY_PATH:-}"
+```
+
 ```bash
 bash experiments/compositional/run_m10.sh
 bash experiments/compositional/eval_m10.sh \
