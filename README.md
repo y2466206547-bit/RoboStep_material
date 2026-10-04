@@ -222,6 +222,19 @@ bash experiments/compositional/eval_m10.sh \
   artifacts/checkpoints/compositional_m10/model_6999.pt
 ```
 
+The packaged M10 checkpoint includes its frozen `config.json` task definition:
+the ten destination chain, three atomic stages per macro, stage-code width,
+reward constants, and PPO configuration. To run the frozen actor and record one
+directly viewable policy rollout as MP4:
+
+```bash
+bash experiments/compositional/record_m10.sh
+```
+
+The video is written to `runs/compositional/m10_video/m10_rule_policy.mp4`.
+This is inference only; it does not retrain the checkpoint. `ffmpeg` and the
+Meta-World installation are required for rendering.
+
 The runner fixes `pick-place-v3`, ten macros, three atomic stages per macro,
 31-way stage code, `tabletop_unique_chain_v8`, seed 42, a 128-env/64-step
 rollout, 700 iterations per macro, and no reset between macro handoffs.
